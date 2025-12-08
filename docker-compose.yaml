@@ -1,0 +1,6 @@
+
+services:
+  app:
+    image: ghcr.io/tum-ens/urbs-weburbs:latest
+    ports:
+      - "5000:5000"
