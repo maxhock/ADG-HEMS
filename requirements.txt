@@ -1,0 +1,17 @@
+# Requirements for Rule_Based_HEMS.ipynb
+# Core data & plotting
+pandas
+numpy
+matplotlib
+
+# HTTP requests
+requests
+
+# Reinforcement learning / Gym
+gymnasium
+stable-baselines3
+shimmy
+
+# Jupyter / notebook kernel
+jupyter
+ipykernel
