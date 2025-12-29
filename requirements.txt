@@ -3,6 +3,8 @@
 pandas
 numpy
 matplotlib
+streamlit
+plotly
 
 # HTTP requests
 requests
