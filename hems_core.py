@@ -80,6 +80,9 @@ class HEMSConfig:
     heat_loss_per_hour_kwh: float = 0.2
     initial_heat_soc: float = 0.5
 
+    # PV specs
+    pv_peak_power_kw: float = 5.0
+
     # Grid
     grid_import_cost: float = 0.30  # $/kWh
     grid_export_revenue: float = 0.08 # $/kWh
@@ -124,7 +127,7 @@ class HEMSPlant:
         t = np.linspace(0, self.config.days * 24, self.config.total_minutes)
 
         # Solar: Peak at noon + random clouds
-        self.solar_profile = np.maximum(0, 5 * np.sin(2 * np.pi * (t - 6) / 24))
+        self.solar_profile = np.maximum(0, self.config.pv_peak_power_kw * np.sin(2 * np.pi * (t - 6) / 24))
         self.solar_profile = np.maximum(0, self.solar_profile - 0.3 * np.random.weibull(0.5, size=len(t)))
 
         # Electrical Load: Morning/Evening peaks
@@ -334,13 +337,13 @@ class InterpolatingDeviceController(BaseDeviceController):
         else:
             return self.target_setpoint
 
-class S2EnvelopeController(BaseDeviceController):
+class EnvelopeController(BaseDeviceController):
     """
-    S2 Inspired Envelope Controller.
-    - Maintains a 10% safety buffer (10% - 90% SoC).
+    Envelope Controller.
+    - Maintains a 10% safety buffer (10% - 90% SoC) if storage is applicable.
     - Applies a 10% tolerance band (absolute % of max power) around the setpoint.
     """
-    def __init__(self, storage_key: str, capacity_attr: str, max_power_attr: str, initial_setpoint: float = 0.0):
+    def __init__(self, max_power_attr: str, storage_key: Optional[str] = None, capacity_attr: Optional[str] = None, initial_setpoint: float = 0.0):
         super().__init__(initial_setpoint)
         self.storage_key = storage_key
         self.capacity_attr = capacity_attr
@@ -355,21 +358,74 @@ class S2EnvelopeController(BaseDeviceController):
         noise = np.random.uniform(-deviation, deviation)
         action = action + noise
 
-        # 2. Check Safety Limits (10% Buffer)
+        # 2. Check Safety Limits (10% Buffer) - Only if storage is defined
+        if self.storage_key and self.capacity_attr:
+            stored = observation[self.storage_key]
+            capacity = getattr(config, self.capacity_attr)
+            
+            # Prevent charging/heating if > 90%
+            if stored >= capacity * 0.90:
+                if action > 0:
+                    action = 0.0
+            
+            # Prevent discharging if < 10%
+            if stored <= capacity * 0.10:
+                if action < 0:
+                    action = 0.0
+        
+        return action
+
+class FRBCDeviceController(BaseDeviceController):
+    """
+    Fill Rate Based Controller (S2 Standard equivalent).
+    - Models the device as having discrete Operation Modes (power levels).
+    - Selects the Operation Mode closest to the setpoint.
+    - Respects storage constraints (Fill Level).
+    """
+    def __init__(self, storage_key: str, capacity_attr: str, max_power_attr: str, initial_setpoint: float = 0.0, discrete_steps: int = 5):
+        super().__init__(initial_setpoint)
+        self.storage_key = storage_key
+        self.capacity_attr = capacity_attr
+        self.max_power_attr = max_power_attr
+        self.discrete_steps = discrete_steps
+
+    def get_action(self, setpoint: Optional[float], observation: Dict, config: HEMSConfig) -> float:
+        # Update setpoint if provided
+        if setpoint is not None:
+            self.last_setpoint = setpoint
+            
+        target_power = self.last_setpoint
+        
+        # 1. Define Operation Modes (Discrete Power Levels)
+        max_power = getattr(config, self.max_power_attr)
+        
+        # Determine range: Battery (-Max to +Max), Heat Pump (0 to Max)
+        if 'battery' in self.max_power_attr:
+            min_power = -max_power
+        else:
+            min_power = 0.0
+            
+        modes = np.linspace(min_power, max_power, self.discrete_steps)
+        
+        # 2. Select Mode closest to target
+        idx = (np.abs(modes - target_power)).argmin()
+        selected_power = modes[idx]
+        
+        # 3. Check Constraints (Fill Level)
         stored = observation[self.storage_key]
         capacity = getattr(config, self.capacity_attr)
         
-        # Prevent charging/heating if > 90%
-        if stored >= capacity * 0.90:
-            if action > 0:
-                action = 0.0
+        # Prevent charging/heating if full
+        if stored >= capacity:
+            if selected_power > 0:
+                selected_power = 0.0
         
-        # Prevent discharging if < 10%
-        if stored <= capacity * 0.10:
-            if action < 0:
-                action = 0.0
+        # Prevent discharging if empty
+        if stored <= 0:
+            if selected_power < 0:
+                selected_power = 0.0
         
-        return action
+        return selected_power
 
 # In[68]:
 
@@ -703,10 +759,10 @@ def plot_results(results_dict):
 
         # --- Subplot 2: Battery ---
         # Power (Left)
-        fig.add_trace(go.Scatter(x=t, y=h['battery_power'], name=f'{name} Bat Power', 
+        fig.add_trace(go.Scatter(x=t, y=h['battery_power'], name=f'{name} Power', 
                                  line=dict(color=c), opacity=0.6, legendgroup=name), row=2, col=1, secondary_y=False)
         # SoC (Right)
-        fig.add_trace(go.Scatter(x=t, y=h['battery_soc'], name=f'{name} Bat SoC', 
+        fig.add_trace(go.Scatter(x=t, y=h['battery_soc'], name=f'{name} SoC', 
                                  line=dict(color=c, dash='dash', width=2), legendgroup=name), row=2, col=1, secondary_y=True)
 
         max_bat_p = max(max_bat_p, np.max(np.abs(h['battery_power'])))

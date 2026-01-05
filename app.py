@@ -8,7 +8,8 @@ from hems_core import (
     MPCOptimizer, 
     PassThroughDeviceController, 
     InterpolatingDeviceController, 
-    S2EnvelopeController,
+    EnvelopeController,
+    FRBCDeviceController,
     run_simulation, 
     plot_results,
     check_docker
@@ -26,13 +27,15 @@ battery_capacity = st.sidebar.number_input("Battery Capacity (kWh)", value=13.5)
 battery_power = st.sidebar.number_input("Battery Max Power (kW)", value=5.0)
 heat_storage_capacity = st.sidebar.number_input("Heat Storage Capacity (kWh)", value=15.0)
 heat_pump_power = st.sidebar.number_input("Heat Pump Max Power (kW)", value=4.0)
+pv_peak_power = st.sidebar.number_input("PV Peak Power (kW)", value=5.0)
 
 config = HEMSConfig(
     days=days,
     battery_capacity_kwh=battery_capacity,
     battery_max_power_kw=battery_power,
     heat_storage_capacity_kwh=heat_storage_capacity,
-    heat_pump_max_power_kw=heat_pump_power
+    heat_pump_max_power_kw=heat_pump_power,
+    pv_peak_power_kw=pv_peak_power
 )
 
 # --- Sidebar: Scenario Management ---
@@ -49,9 +52,9 @@ with st.sidebar.form("add_scenario"):
     optimizer_name = st.selectbox("Optimizer", ["Residual", "Rule-Based", "MPC"])
     
     st.markdown("### Device Controllers")
-    bat_ctrl_name = st.selectbox("Battery Controller", ["Pass-Through", "Interpolating", "S2 Envelope"])
-    hp_ctrl_name = st.selectbox("Heat Pump Controller", ["Pass-Through", "Interpolating", "S2 Envelope"])
-    pv_ctrl_name = st.selectbox("PV Controller", ["Pass-Through", "Interpolating"])
+    bat_ctrl_name = st.selectbox("Battery Controller", ["Pass-Through", "Interpolating", "Envelope", "FRBC"])
+    hp_ctrl_name = st.selectbox("Heat Pump Controller", ["Pass-Through", "Interpolating", "Envelope", "FRBC"])
+    pv_ctrl_name = st.selectbox("PV Controller", ["Pass-Through", "Interpolating", "Envelope"])
     
     submitted = st.form_submit_button("Add Scenario")
     if submitted:
@@ -97,15 +100,36 @@ def get_controller_instance(type_name, device_type):
         init_sp = 999.0 if device_type == 'pv' else 0.0
         return InterpolatingDeviceController(initial_setpoint=init_sp)
         
-    elif type_name == "S2 Envelope":
+    elif type_name == "Envelope":
         if device_type == 'battery':
-            return S2EnvelopeController(
+            return EnvelopeController(
                 storage_key='battery_soc_kwh', 
                 capacity_attr='battery_capacity_kwh', 
                 max_power_attr='battery_max_power_kw'
             )
         elif device_type == 'heat_pump':
-            return S2EnvelopeController(
+            return EnvelopeController(
+                storage_key='heat_storage_kwh', 
+                capacity_attr='heat_storage_capacity_kwh', 
+                max_power_attr='heat_pump_max_power_kw'
+            )
+        elif device_type == 'pv':
+            return EnvelopeController(
+                max_power_attr='pv_peak_power_kw',
+                initial_setpoint=999.0
+            )
+        else:
+            return PassThroughDeviceController(initial_setpoint=999.0)
+
+    elif type_name == "FRBC":
+        if device_type == 'battery':
+            return FRBCDeviceController(
+                storage_key='battery_soc_kwh', 
+                capacity_attr='battery_capacity_kwh', 
+                max_power_attr='battery_max_power_kw'
+            )
+        elif device_type == 'heat_pump':
+            return FRBCDeviceController(
                 storage_key='heat_storage_kwh', 
                 capacity_attr='heat_storage_capacity_kwh', 
                 max_power_attr='heat_pump_max_power_kw'
